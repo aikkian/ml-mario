@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Trained models (these can be large; regenerate by training) and logs
+models/
+logs/
+
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/
