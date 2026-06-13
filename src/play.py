@@ -32,11 +32,18 @@ def main():
         "--episodes", type=int, default=5,
         help="How many full attempts to watch.",
     )
+    parser.add_argument(
+        "--stochastic", action="store_true",
+        help="Play with exploration randomness (like during training) instead of "
+             "always taking the single best move. Early in training this often "
+             "reaches the flag when deterministic play can't yet.",
+    )
     args = parser.parse_args()
 
     # render_mode="human" opens the game window so you can see it.
     env = make_mario_env(render_mode="human")
     model = PPO.load(args.model)
+    deterministic = not args.stochastic
 
     for episode in range(1, args.episodes + 1):
         obs, _ = env.reset()
@@ -48,9 +55,9 @@ def main():
 
         while not done:
             env.render()
-            # deterministic=True -> take the agent's single best action (no random
-            # exploration), so we see its actual skill.
-            action, _ = model.predict(obs, deterministic=True)
+            # deterministic=True -> the agent's single best action (no random
+            # exploration). --stochastic flips this on to add exploration.
+            action, _ = model.predict(obs, deterministic=deterministic)
             obs, reward, terminated, truncated, info = env.step(int(action))
             total_reward += reward
             done = terminated or truncated
