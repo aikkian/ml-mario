@@ -37,6 +37,7 @@ from functools import partial
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from env import make_mario_env, DEFAULT_LEVEL
@@ -92,6 +93,16 @@ def main():
              "SuperMarioBros-1-2-v0.",
     )
     parser.add_argument(
+        "--ent-coef", type=float, default=0.01,
+        help="Exploration strength. Higher (e.g. 0.05) makes the agent try more "
+             "new things — useful when it keeps dying at the same spot. Lower "
+             "makes it more decisive.",
+    )
+    parser.add_argument(
+        "--learning-rate", type=float, default=1e-4,
+        help="How big each learning step is.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
@@ -106,6 +117,13 @@ def main():
         print(f"Resuming training from {args.resume} ...")
         model = PPO.load(args.resume, env=env, device=args.device,
                          tensorboard_log="logs")
+        # Apply the (possibly new) tuning knobs to the loaded model. Raising
+        # --ent-coef here is the usual way to shake a model out of a rut where it
+        # keeps dying at the same place.
+        model.ent_coef = args.ent_coef
+        model.learning_rate = args.learning_rate
+        model.lr_schedule = get_schedule_fn(args.learning_rate)
+        print(f"ent_coef={model.ent_coef}  learning_rate={args.learning_rate}")
         reset_counter = False
     else:
         # Create a fresh PPO agent.
@@ -119,13 +137,13 @@ def main():
             verbose=1,
             device=args.device,
             tensorboard_log="logs",
-            learning_rate=1e-4,   # how big each learning step is
+            learning_rate=args.learning_rate,  # how big each learning step is
             n_steps=512,          # frames per env collected before each update
             batch_size=64,
             n_epochs=10,
             gamma=0.9,            # how much it values future vs immediate reward
             gae_lambda=1.0,
-            ent_coef=0.01,        # encourages exploration (trying new things)
+            ent_coef=args.ent_coef,  # encourages exploration (trying new things)
         )
         reset_counter = True
 
