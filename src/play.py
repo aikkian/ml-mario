@@ -24,6 +24,7 @@ import time
 
 import cv2
 from stable_baselines3 import PPO
+from stable_baselines3.common.utils import set_random_seed
 
 from env import make_mario_env
 
@@ -62,13 +63,20 @@ def write_video(frames, path, fps):
     writer.release()
 
 
-def play_episode(env, model, deterministic, step_delay, record=False):
+def play_episode(env, model, deterministic, step_delay, record=False, seed=None):
     """Play one full attempt.
 
     Returns (beat_level, status, total_reward, max_x, frames) where `frames` is a
     list of full-color RGB frames if record=True, else an empty list.
+
+    If `seed` is given, the random number generators are fixed so the attempt is
+    fully reproducible — the same seed always produces the exact same run.
     """
-    obs, _ = env.reset()
+    if seed is not None:
+        set_random_seed(seed)
+        obs, _ = env.reset(seed=seed)
+    else:
+        obs, _ = env.reset()
     done = False
     total_reward = 0.0
     beat_level = False
@@ -141,6 +149,18 @@ def main():
         "--video-dir", type=str, default="videos",
         help="Folder to save recorded videos into (used with --record).",
     )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Make runs REPRODUCIBLE. With a seed, episode N always plays out "
+             "identically, so you can re-watch a specific attempt. The seed used "
+             "for each episode is printed so you can replay it later.",
+    )
+    parser.add_argument(
+        "--replay", type=int, default=None,
+        help="Replay exactly one episode number from a seeded run (requires "
+             "--seed). e.g. --seed 0 --replay 36 re-plays the run that was "
+             "episode 36 under seed 0.",
+    )
     args = parser.parse_args()
 
     # render_mode="human" opens the game window so you can see it.
@@ -161,30 +181,57 @@ def main():
     # at roughly real time.
     video_fps = max(round(60 / skip), 1)
 
-    # Both modes try up to `episodes` attempts; --until-flag stops on the first
-    # win, plain mode plays them all.
-    max_attempts = args.episodes
-    won = False
-    for episode in range(1, max_attempts + 1):
-        beat_level, status, total_reward, max_x, frames = play_episode(
-            env, model, deterministic, step_delay, record=args.record
-        )
-        print(
-            f"Episode {episode}: reward={total_reward:.0f}  "
-            f"reached x={max_x}  ->  {status}"
-        )
+    def episode_seed(episode):
+        """The seed for a given episode number (None if --seed wasn't given)."""
+        return None if args.seed is None else args.seed + episode - 1
 
-        # Save a video of this attempt: every attempt in plain mode, or only the
-        # winning attempt in --until-flag mode.
+    def save_if_recording(episode, beat_level, frames):
         if args.record and (beat_level or not args.until_flag):
             suffix = "_FLAG" if beat_level else ""
             path = os.path.join(args.video_dir, f"episode_{episode}{suffix}.mp4")
             write_video(frames, path, video_fps)
             print(f"  saved video: {path}")
 
+    # --replay N: reproduce exactly one episode from a seeded run, then exit.
+    if args.replay is not None:
+        if args.seed is None:
+            print("--replay needs --seed (the seed the original run used).")
+            env.close()
+            return
+        episode = args.replay
+        seed = episode_seed(episode)
+        beat_level, status, total_reward, max_x, frames = play_episode(
+            env, model, deterministic, step_delay, record=args.record, seed=seed
+        )
+        print(f"Replay of episode {episode} (seed={seed}): "
+              f"reward={total_reward:.0f}  reached x={max_x}  ->  {status}")
+        save_if_recording(episode, beat_level, frames)
+        env.close()
+        return
+
+    # Both modes try up to `episodes` attempts; --until-flag stops on the first
+    # win, plain mode plays them all.
+    max_attempts = args.episodes
+    won = False
+    for episode in range(1, max_attempts + 1):
+        seed = episode_seed(episode)
+        beat_level, status, total_reward, max_x, frames = play_episode(
+            env, model, deterministic, step_delay, record=args.record, seed=seed
+        )
+        seed_note = f" (seed={seed})" if seed is not None else ""
+        print(
+            f"Episode {episode}{seed_note}: reward={total_reward:.0f}  "
+            f"reached x={max_x}  ->  {status}"
+        )
+
+        save_if_recording(episode, beat_level, frames)
+
         if beat_level and args.until_flag:
             won = True
             print(f"\n🎉 Reached the flag on attempt {episode}! Stopping.")
+            if args.seed is not None:
+                print(f"Replay it anytime with:  --seed {args.seed} "
+                      f"--replay {episode}")
             break
 
     if args.until_flag and not won:
