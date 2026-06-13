@@ -112,6 +112,10 @@ class MarioGymnasium(gymnasium.Env):
         self._max_x = 0            # furthest right Mario has reached this episode
         self._stuck_counter = 0    # steps since that furthest point
 
+        # The most recent FULL-COLOR game frame (before grayscale/resize). Kept
+        # so play.py can record nice-looking videos. Shape ~ (240, 256, 3) uint8.
+        self._last_rgb = None
+
         # ACTION SPACE: a discrete number of button combos (carried over from
         # JoypadSpace). e.g. action 1 might mean "press right".
         self.action_space = spaces.Discrete(self._env.action_space.n)
@@ -146,6 +150,7 @@ class MarioGymnasium(gymnasium.Env):
         # Old gym returns just `obs`; newer gym returns `(obs, info)`.
         if isinstance(obs, tuple):
             obs = obs[0]
+        self._last_rgb = obs       # keep the full-color frame for recording
         frame = self._preprocess(obs)
         # Fill the whole stack with the first frame to start.
         for _ in range(self._stack):
@@ -174,6 +179,7 @@ class MarioGymnasium(gymnasium.Env):
             if done:
                 break
 
+        self._last_rgb = obs       # keep the full-color frame for recording
         frame = self._preprocess(obs)
         self._frames.append(frame)
 
