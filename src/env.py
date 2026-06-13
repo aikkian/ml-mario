@@ -24,6 +24,9 @@ Two jobs happen here:
 An agent is only as smart as what it can perceive, so this step matters a lot.
 """
 
+# Compatibility shims for Python 3.13 / NumPy 2.x — MUST be imported first.
+import _compat  # noqa: F401
+
 from collections import deque
 
 import cv2

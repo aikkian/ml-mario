@@ -170,10 +170,19 @@ how the reward curve responds. Good knobs to explore:
 Almost every problem here is a **dependency version mismatch** between the old
 Mario libraries and the newer RL library.
 
-**`OverflowError: Python integer 1024 out of bounds for uint8` (or a NumPy 2.0
-warning):** You're on NumPy 2.0 and/or Python 3.11+. The old emulator only works
-with **NumPy 1.x** and **Python 3.8–3.10**. NumPy 1.x has no build for Python
-3.13, so the fix is to recreate your virtual environment with **Python 3.10**:
+### Running on Python 3.13 (NumPy 2.0)
+
+The cleanest setup is **Python 3.8–3.10** (with NumPy 1.x). But the project also
+runs on **Python 3.13** thanks to `src/_compat.py`, a compatibility shim that
+flips NumPy 2.0 back to its old integer-math behavior so the emulator doesn't
+crash with `OverflowError: ... out of bounds for uint8`.
+
+To use Python 3.13 you don't need to do anything special — just install and run.
+The shim is imported automatically by `smoke_test.py`, `train.py`, `play.py`,
+and `env.py`. If you ever import the Mario environment from your own script, add
+`import _compat` as the **first** line.
+
+If you'd rather use the rock-solid 3.10 path instead:
 
 ```bash
 # macOS (Homebrew):
@@ -182,7 +191,7 @@ rm -rf venv
 python3.10 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt   # numpy<2 is pinned here
+pip install -r requirements.txt   # numpy<2 is pinned for Python < 3.11
 ```
 
 **If `pip install -r requirements.txt` or the smoke test fails**, try the older,

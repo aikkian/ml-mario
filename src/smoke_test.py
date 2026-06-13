@@ -17,6 +17,8 @@ Run it:
     python src/smoke_test.py
 """
 
+import _compat  # noqa: F401  (Python 3.13 / NumPy 2.x shims — keep first)
+
 from env import make_mario_env
 
 

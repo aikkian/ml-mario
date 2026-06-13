@@ -22,6 +22,8 @@ Watch progress live (in a second terminal):
 then open the URL it prints (usually http://localhost:6006).
 """
 
+import _compat  # noqa: F401  (Python 3.13 / NumPy 2.x shims — keep first)
+
 import argparse
 
 from stable_baselines3 import PPO

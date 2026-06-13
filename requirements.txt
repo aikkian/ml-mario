@@ -12,14 +12,11 @@
 # is the older combo: stable-baselines3==1.8.0 + gym==0.21.0
 # ----------------------------------------------------------------------------
 
-# IMPORTANT: this stack needs Python 3.8-3.10. On Python 3.11+ (especially
-# 3.13) the install will appear to work but then crash at runtime with an
-# "OverflowError: ... out of bounds for uint8" from nes-py. See the README.
-
-# NumPy 2.0 broke the old emulator (it relies on silent integer overflow that
-# NumPy 2.0 now forbids). Pin to the 1.x line. NOTE: NumPy 1.x has no builds
-# for Python 3.13 — another reason to use Python 3.10.
-numpy<2
+# NumPy: the old emulator was written for NumPy 1.x. On Python 3.8-3.10 we pin
+# to 1.x (cleanest). On Python 3.11+ (e.g. 3.13) NumPy 1.x has no build, so we
+# allow NumPy 2.x — and `src/_compat.py` applies shims so the emulator still
+# works. See the README "Running on Python 3.13" section.
+numpy<2; python_version < "3.11"
 
 # The NES emulator and the Super Mario Bros environment (the ROM ships inside
 # this package, so you do NOT need to find a ROM yourself).

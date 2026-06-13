@@ -13,6 +13,8 @@ Run it:
     python src/play.py --model models/mario_ppo_500000_steps --episodes 3
 """
 
+import _compat  # noqa: F401  (Python 3.13 / NumPy 2.x shims — keep first)
+
 import argparse
 
 from stable_baselines3 import PPO
