@@ -16,6 +16,7 @@ Run it:
 import _compat  # noqa: F401  (Python 3.13 / NumPy 2.x shims — keep first)
 
 import argparse
+import time
 
 from stable_baselines3 import PPO
 
@@ -38,12 +39,23 @@ def main():
              "always taking the single best move. Early in training this often "
              "reaches the flag when deterministic play can't yet.",
     )
+    parser.add_argument(
+        "--fps", type=float, default=60.0,
+        help="Playback speed in game frames per second. 60 ~= real time; use a "
+             "lower value (e.g. 15 or 30) to watch in slow motion. 0 = as fast "
+             "as possible.",
+    )
     args = parser.parse_args()
 
     # render_mode="human" opens the game window so you can see it.
     env = make_mario_env(render_mode="human")
     model = PPO.load(args.model)
     deterministic = not args.stochastic
+
+    # Each step advances `skip` game frames, so to hit the target fps we pause
+    # skip/fps seconds per step. (fps <= 0 means no pausing = full speed.)
+    skip = getattr(env, "_skip", 4)
+    step_delay = (skip / args.fps) if args.fps > 0 else 0.0
 
     for episode in range(1, args.episodes + 1):
         obs, _ = env.reset()
@@ -55,6 +67,8 @@ def main():
 
         while not done:
             env.render()
+            if step_delay:
+                time.sleep(step_delay)  # slow playback down to the target fps
             # deterministic=True -> the agent's single best action (no random
             # exploration). --stochastic flips this on to add exploration.
             action, _ = model.predict(obs, deterministic=deterministic)
