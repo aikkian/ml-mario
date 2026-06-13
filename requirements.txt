@@ -37,3 +37,7 @@ opencv-python
 
 # Live training charts so you can watch the agent improve.
 tensorboard
+
+# Saving gameplay videos as H.264 .mp4 (plays natively on macOS/Windows/web).
+imageio
+imageio-ffmpeg

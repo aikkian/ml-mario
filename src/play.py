@@ -29,10 +29,29 @@ from env import make_mario_env
 
 
 def write_video(frames, path, fps):
-    """Save a list of RGB frames as an .mp4 video."""
+    """Save a list of RGB frames as an .mp4 video.
+
+    Prefers imageio + ffmpeg (H.264), which plays natively on macOS/Windows/web.
+    Falls back to OpenCV's mp4v codec — note that mp4v files often appear FROZEN
+    in QuickTime/Preview (they play in VLC), which is why H.264 is preferred.
+    """
     if not frames:
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    # Preferred: H.264 via imageio-ffmpeg. frames are RGB, which imageio expects.
+    try:
+        import imageio
+        writer = imageio.get_writer(path, fps=fps, codec="libx264",
+                                    macro_block_size=16)
+        for frame in frames:
+            writer.append_data(frame)
+        writer.close()
+        return
+    except Exception as exc:
+        print(f"  (imageio H.264 unavailable: {exc}; falling back to OpenCV mp4v)")
+
+    # Fallback: OpenCV mp4v. May not play in QuickTime — try VLC if so.
     height, width = frames[0].shape[:2]
     writer = cv2.VideoWriter(
         path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
