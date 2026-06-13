@@ -43,6 +43,8 @@ def main():
         done = False
         total_reward = 0.0
         beat_level = False
+        truncated = False
+        max_x = 0          # furthest right Mario reached this attempt
 
         while not done:
             env.render()
@@ -52,11 +54,22 @@ def main():
             obs, reward, terminated, truncated, info = env.step(int(action))
             total_reward += reward
             done = terminated or truncated
+            max_x = max(max_x, info.get("x_pos", 0))
             if info.get("flag_get"):
                 beat_level = True
 
-        status = "🏁 BEAT THE LEVEL!" if beat_level else "died / timed out"
-        print(f"Episode {episode}: reward={total_reward:.0f}  ->  {status}")
+        # Explain how the attempt ended: beat the flag, got stuck (our early
+        # cut-off truncates with no game-over), or actually died / ran out of time.
+        if beat_level:
+            status = "🏁 BEAT THE LEVEL!"
+        elif truncated:
+            status = "stuck (no progress)"
+        else:
+            status = "died / out of time"
+        print(
+            f"Episode {episode}: reward={total_reward:.0f}  "
+            f"reached x={max_x}  ->  {status}"
+        )
 
     env.close()
 
