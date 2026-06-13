@@ -34,8 +34,11 @@ import numpy as np
 import gymnasium
 from gymnasium import spaces
 
+import re
+
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
+from gym_super_mario_bros.smb_env import SuperMarioBrosEnv
 from nes_py.wrappers import JoypadSpace
 
 
@@ -43,20 +46,42 @@ from nes_py.wrappers import JoypadSpace
 # (reward for moving right + reaching the flag; penalty for dying / wasting time).
 DEFAULT_LEVEL = "SuperMarioBros-1-1-v0"
 
+# Map the "vN" suffix in a level id to nes-py's rom_mode (v0 = the normal game).
+_ROM_MODES = {"0": "vanilla", "1": "downsample", "2": "pixel", "3": "rectangle"}
+
 
 def _make_base_env(level):
     """Create the raw Mario env and reduce the controls to a small, sensible set.
 
+    We build the environment DIRECTLY instead of via ``gym_super_mario_bros.make``.
+    Why: gym 0.26 wraps ``make()`` output in helper wrappers (TimeLimit,
+    OrderEnforcing) that assume the NEW 5-value step API, but nes-py still uses
+    the OLD 4-value API — which crashes with
+    "not enough values to unpack (expected 5, got 4)". Constructing the env class
+    directly skips those wrappers; our MarioGymnasium adapter then handles the
+    old API itself.
+
     SIMPLE_MOVEMENT is ~7 button combos (e.g. "run right", "jump right") instead
     of every possible NES input. Fewer choices = much faster learning.
     """
+    match = re.match(r"SuperMarioBros(2?)-(\d+)-(\d+)-v(\d)", level)
     try:
-        # Newer gym needs the env checker disabled so it doesn't reject the old
-        # Mario library's return format.
-        env = gym_super_mario_bros.make(level, disable_env_checker=True)
-    except TypeError:
-        # Older gym (the fallback combo) doesn't know that argument.
-        env = gym_super_mario_bros.make(level)
+        if match:
+            lost_levels = match.group(1) == "2"
+            world, stage, version = int(match.group(2)), int(match.group(3)), match.group(4)
+            env = SuperMarioBrosEnv(
+                rom_mode=_ROM_MODES.get(version, "vanilla"),
+                lost_levels=lost_levels,
+                target=(world, stage),
+            )
+        else:
+            env = SuperMarioBrosEnv()
+    except Exception:
+        # Fallback: the registered make() path (used by the older gym combo).
+        try:
+            env = gym_super_mario_bros.make(level, disable_env_checker=True)
+        except TypeError:
+            env = gym_super_mario_bros.make(level)
     return JoypadSpace(env, SIMPLE_MOVEMENT)
 
 
