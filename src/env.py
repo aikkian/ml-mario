@@ -24,6 +24,9 @@ Two jobs happen here:
 An agent is only as smart as what it can perceive, so this step matters a lot.
 """
 
+# Compatibility shims for Python 3.13 / NumPy 2.x — MUST be imported first.
+import _compat  # noqa: F401
+
 from collections import deque
 
 import cv2
@@ -31,8 +34,11 @@ import numpy as np
 import gymnasium
 from gymnasium import spaces
 
+import re
+
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
+from gym_super_mario_bros.smb_env import SuperMarioBrosEnv
 from nes_py.wrappers import JoypadSpace
 
 
@@ -40,20 +46,42 @@ from nes_py.wrappers import JoypadSpace
 # (reward for moving right + reaching the flag; penalty for dying / wasting time).
 DEFAULT_LEVEL = "SuperMarioBros-1-1-v0"
 
+# Map the "vN" suffix in a level id to nes-py's rom_mode (v0 = the normal game).
+_ROM_MODES = {"0": "vanilla", "1": "downsample", "2": "pixel", "3": "rectangle"}
+
 
 def _make_base_env(level):
     """Create the raw Mario env and reduce the controls to a small, sensible set.
 
+    We build the environment DIRECTLY instead of via ``gym_super_mario_bros.make``.
+    Why: gym 0.26 wraps ``make()`` output in helper wrappers (TimeLimit,
+    OrderEnforcing) that assume the NEW 5-value step API, but nes-py still uses
+    the OLD 4-value API — which crashes with
+    "not enough values to unpack (expected 5, got 4)". Constructing the env class
+    directly skips those wrappers; our MarioGymnasium adapter then handles the
+    old API itself.
+
     SIMPLE_MOVEMENT is ~7 button combos (e.g. "run right", "jump right") instead
     of every possible NES input. Fewer choices = much faster learning.
     """
+    match = re.match(r"SuperMarioBros(2?)-(\d+)-(\d+)-v(\d)", level)
     try:
-        # Newer gym needs the env checker disabled so it doesn't reject the old
-        # Mario library's return format.
-        env = gym_super_mario_bros.make(level, disable_env_checker=True)
-    except TypeError:
-        # Older gym (the fallback combo) doesn't know that argument.
-        env = gym_super_mario_bros.make(level)
+        if match:
+            lost_levels = match.group(1) == "2"
+            world, stage, version = int(match.group(2)), int(match.group(3)), match.group(4)
+            env = SuperMarioBrosEnv(
+                rom_mode=_ROM_MODES.get(version, "vanilla"),
+                lost_levels=lost_levels,
+                target=(world, stage),
+            )
+        else:
+            env = SuperMarioBrosEnv()
+    except Exception:
+        # Fallback: the registered make() path (used by the older gym combo).
+        try:
+            env = gym_super_mario_bros.make(level, disable_env_checker=True)
+        except TypeError:
+            env = gym_super_mario_bros.make(level)
     return JoypadSpace(env, SIMPLE_MOVEMENT)
 
 
@@ -64,7 +92,7 @@ class MarioGymnasium(gymnasium.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
     def __init__(self, level=DEFAULT_LEVEL, skip=4, stack=4,
-                 width=84, height=84, render_mode=None):
+                 width=84, height=84, render_mode=None, stuck_steps=200):
         super().__init__()
         self._env = _make_base_env(level)
 
@@ -74,6 +102,19 @@ class MarioGymnasium(gymnasium.Env):
         self._height = height
         self.render_mode = render_mode
         self._frames = deque(maxlen=stack)
+
+        # STUCK DETECTION: if Mario makes no rightward progress for this many
+        # steps (e.g. jammed against a pipe), we end the episode early instead of
+        # waiting out the in-game timer. This avoids wasting training time on
+        # dead attempts. 0 disables it. (Each step is `skip` frames, so 200 steps
+        # ~= 800 frames ~= 13 seconds of no progress.)
+        self._stuck_steps = stuck_steps
+        self._max_x = 0            # furthest right Mario has reached this episode
+        self._stuck_counter = 0    # steps since that furthest point
+
+        # The most recent FULL-COLOR game frame (before grayscale/resize). Kept
+        # so play.py can record nice-looking videos. Shape ~ (240, 256, 3) uint8.
+        self._last_rgb = None
 
         # ACTION SPACE: a discrete number of button combos (carried over from
         # JoypadSpace). e.g. action 1 might mean "press right".
@@ -109,10 +150,14 @@ class MarioGymnasium(gymnasium.Env):
         # Old gym returns just `obs`; newer gym returns `(obs, info)`.
         if isinstance(obs, tuple):
             obs = obs[0]
+        self._last_rgb = obs       # keep the full-color frame for recording
         frame = self._preprocess(obs)
         # Fill the whole stack with the first frame to start.
         for _ in range(self._stack):
             self._frames.append(frame)
+        # Reset the stuck tracker for the new attempt.
+        self._max_x = 0
+        self._stuck_counter = 0
         return self._stacked(), {}
 
     def step(self, action):
@@ -134,14 +179,31 @@ class MarioGymnasium(gymnasium.Env):
             if done:
                 break
 
+        self._last_rgb = obs       # keep the full-color frame for recording
         frame = self._preprocess(obs)
         self._frames.append(frame)
 
-        # gymnasium splits "episode over" into terminated (e.g. died / won) vs
-        # truncated (time limit). The Mario env lumps these together, so we
-        # report it all as `terminated`.
+        # gymnasium splits "episode over" into terminated (a real game-over: Mario
+        # died or reached the flag) vs truncated (the episode was cut short for
+        # another reason). The Mario env reports game-overs via `done`.
         terminated = done
         truncated = False
+
+        # STUCK DETECTION: end the episode early if Mario stops advancing right.
+        if self._stuck_steps:
+            x_pos = info.get("x_pos")
+            if x_pos is not None:
+                if x_pos > self._max_x:
+                    self._max_x = x_pos       # new furthest point -> not stuck
+                    self._stuck_counter = 0
+                else:
+                    self._stuck_counter += 1  # no progress this step
+                if self._stuck_counter >= self._stuck_steps:
+                    # Cut it short. This is "truncated", not "terminated",
+                    # because the game didn't actually end — which is the
+                    # correct signal for the learning algorithm.
+                    truncated = True
+
         return self._stacked(), float(total_reward), terminated, truncated, info
 
     def render(self):
@@ -156,6 +218,12 @@ class MarioGymnasium(gymnasium.Env):
         self._env.close()
 
 
-def make_mario_env(level=DEFAULT_LEVEL, render_mode=None):
-    """Convenience factory used by train.py and play.py."""
-    return MarioGymnasium(level=level, render_mode=render_mode)
+def make_mario_env(level=DEFAULT_LEVEL, render_mode=None, stuck_steps=200):
+    """Convenience factory used by train.py and play.py.
+
+    `stuck_steps` ends an episode early after that many steps without rightward
+    progress (set 0 to disable). This speeds up training by not wasting frames on
+    a jammed Mario.
+    """
+    return MarioGymnasium(level=level, render_mode=render_mode,
+                          stuck_steps=stuck_steps)

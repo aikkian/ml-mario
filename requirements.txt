@@ -12,6 +12,12 @@
 # is the older combo: stable-baselines3==1.8.0 + gym==0.21.0
 # ----------------------------------------------------------------------------
 
+# NumPy: the old emulator was written for NumPy 1.x. On Python 3.8-3.10 we pin
+# to 1.x (cleanest). On Python 3.11+ (e.g. 3.13) NumPy 1.x has no build, so we
+# allow NumPy 2.x — and `src/_compat.py` applies shims so the emulator still
+# works. See the README "Running on Python 3.13" section.
+numpy<2; python_version < "3.11"
+
 # The NES emulator and the Super Mario Bros environment (the ROM ships inside
 # this package, so you do NOT need to find a ROM yourself).
 gym-super-mario-bros==7.4.0
@@ -31,3 +37,7 @@ opencv-python
 
 # Live training charts so you can watch the agent improve.
 tensorboard
+
+# Saving gameplay videos as H.264 .mp4 (plays natively on macOS/Windows/web).
+imageio
+imageio-ffmpeg

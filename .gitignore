@@ -13,6 +13,9 @@ env/
 models/
 logs/
 
+# Recorded gameplay videos
+videos/
+
 # OS / editor cruft
 .DS_Store
 .idea/
