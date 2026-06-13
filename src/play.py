@@ -26,7 +26,7 @@ import cv2
 from stable_baselines3 import PPO
 from stable_baselines3.common.utils import set_random_seed
 
-from env import make_mario_env
+from env import make_mario_env, DEFAULT_LEVEL
 
 
 def write_video(frames, path, fps):
@@ -118,6 +118,11 @@ def main():
         help="Path to a saved model (without the .zip extension is fine).",
     )
     parser.add_argument(
+        "--level", type=str, default=DEFAULT_LEVEL,
+        help="Which level to play, e.g. SuperMarioBros-1-1-v0 or "
+             "SuperMarioBros-1-2-v0. Use the same level the model was trained on.",
+    )
+    parser.add_argument(
         "--episodes", type=int, default=5,
         help="How many full attempts to watch.",
     )
@@ -164,7 +169,7 @@ def main():
     args = parser.parse_args()
 
     # render_mode="human" opens the game window so you can see it.
-    env = make_mario_env(render_mode="human")
+    env = make_mario_env(level=args.level, render_mode="human")
     model = PPO.load(args.model)
     deterministic = not args.stochastic
 

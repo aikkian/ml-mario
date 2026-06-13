@@ -33,23 +33,24 @@ then open the URL it prints (usually http://localhost:6006).
 import _compat  # noqa: F401  (Python 3.13 / NumPy 2.x shims — keep first)
 
 import argparse
+from functools import partial
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
-from env import make_mario_env
+from env import make_mario_env, DEFAULT_LEVEL
 from callbacks import make_checkpoint_callback, FlagCallback
 
 
-def _make_one_env():
+def _make_one_env(level):
     """Build a single wrapped Mario env. Monitor records episode reward/length
     for the live charts."""
-    env = make_mario_env(render_mode=None)  # no window while training = faster
+    env = make_mario_env(level=level, render_mode=None)  # no window = faster
     return Monitor(env)
 
 
-def build_training_env(n_envs):
+def build_training_env(n_envs, level):
     """Create `n_envs` Mario environments for the agent to learn from.
 
     - n_envs == 1: DummyVecEnv (everything in this one process).
@@ -57,7 +58,7 @@ def build_training_env(n_envs):
                    genuinely run in parallel across CPU cores. This is the main
                    speed lever on a CPU/Mac.
     """
-    env_fns = [_make_one_env for _ in range(n_envs)]
+    env_fns = [partial(_make_one_env, level) for _ in range(n_envs)]
     if n_envs > 1:
         return SubprocVecEnv(env_fns)
     return DummyVecEnv(env_fns)
@@ -86,12 +87,18 @@ def main():
              "models/mario_ppo_500000_steps). Omit to start fresh.",
     )
     parser.add_argument(
+        "--level", type=str, default=DEFAULT_LEVEL,
+        help="Which level to train on, e.g. SuperMarioBros-1-1-v0 or "
+             "SuperMarioBros-1-2-v0.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
     args = parser.parse_args()
 
-    env = build_training_env(args.n_envs)
+    env = build_training_env(args.n_envs, args.level)
+    print(f"Level: {args.level}")
 
     if args.resume:
         # Load the existing brain and keep training it (don't reset the step
