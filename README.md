@@ -170,6 +170,21 @@ how the reward curve responds. Good knobs to explore:
 Almost every problem here is a **dependency version mismatch** between the old
 Mario libraries and the newer RL library.
 
+**`OverflowError: Python integer 1024 out of bounds for uint8` (or a NumPy 2.0
+warning):** You're on NumPy 2.0 and/or Python 3.11+. The old emulator only works
+with **NumPy 1.x** and **Python 3.8–3.10**. NumPy 1.x has no build for Python
+3.13, so the fix is to recreate your virtual environment with **Python 3.10**:
+
+```bash
+# macOS (Homebrew):
+brew install python@3.10
+rm -rf venv
+python3.10 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt   # numpy<2 is pinned here
+```
+
 **If `pip install -r requirements.txt` or the smoke test fails**, try the older,
 very stable combo instead:
 
