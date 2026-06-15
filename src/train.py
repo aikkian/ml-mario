@@ -121,6 +121,21 @@ def main():
         help="Episodes per level per evaluation.",
     )
     parser.add_argument(
+        "--n-epochs", type=int, default=10,
+        help="Training passes over each batch of experience. LOWER (e.g. 4) = "
+             "faster on CPU (higher fps), slightly less sample-efficient. The "
+             "main knob for speeding up CPU training.",
+    )
+    parser.add_argument(
+        "--n-steps", type=int, default=512,
+        help="Frames each env collects before an update. (Applied on fresh runs.)",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=64,
+        help="Minibatch size for the network update. Larger can use the CPU "
+             "more efficiently.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
@@ -147,7 +162,11 @@ def main():
         model.ent_coef = args.ent_coef
         model.learning_rate = args.learning_rate
         model.lr_schedule = get_schedule_fn(args.learning_rate)
-        print(f"ent_coef={model.ent_coef}  learning_rate={args.learning_rate}")
+        # Safe to change on resume (n_steps stays as saved to keep the buffer).
+        model.n_epochs = args.n_epochs
+        model.batch_size = args.batch_size
+        print(f"ent_coef={model.ent_coef}  learning_rate={args.learning_rate}  "
+              f"n_epochs={model.n_epochs}  batch_size={model.batch_size}")
         reset_counter = False
     else:
         # Create a fresh PPO agent.
@@ -162,9 +181,9 @@ def main():
             device=args.device,
             tensorboard_log="logs",
             learning_rate=args.learning_rate,  # how big each learning step is
-            n_steps=512,          # frames per env collected before each update
-            batch_size=64,
-            n_epochs=10,
+            n_steps=args.n_steps,    # frames per env collected before each update
+            batch_size=args.batch_size,
+            n_epochs=args.n_epochs,
             gamma=0.9,            # how much it values future vs immediate reward
             gae_lambda=1.0,
             ent_coef=args.ent_coef,  # encourages exploration (trying new things)
