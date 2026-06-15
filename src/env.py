@@ -50,13 +50,44 @@ DEFAULT_LEVEL = "SuperMarioBros-1-1-v0"
 _ROM_MODES = {"0": "vanilla", "1": "downsample", "2": "pixel", "3": "rectangle"}
 
 
+def _normalize_stage(level):
+    """Accept 'SuperMarioBros-1-2-v0' OR '1-2' and return ('1-2', rom_mode)."""
+    match = re.match(r"(?:SuperMarioBros2?-)?(\d+)-(\d+)(?:-v(\d))?$", str(level))
+    if not match:
+        return str(level), "vanilla"
+    world, stage, version = match.group(1), match.group(2), match.group(3) or "0"
+    return f"{world}-{stage}", _ROM_MODES.get(version, "vanilla")
+
+
+def _make_random_stages_env(levels):
+    """Build a Mario env that picks a RANDOM level from `levels` each episode.
+
+    This is the heart of training a generalist: because the agent can't predict
+    which level it's in, it must learn skills that transfer across all of them
+    instead of memorizing one layout.
+    """
+    stages, rom_mode = [], "vanilla"
+    for level in levels:
+        stage, rom_mode = _normalize_stage(level)
+        stages.append(stage)
+    # SuperMarioBrosRandomStagesEnv loads the ROM once and re-randomizes the
+    # target stage on every reset.
+    from gym_super_mario_bros import SuperMarioBrosRandomStagesEnv
+    env = SuperMarioBrosRandomStagesEnv(rom_mode=rom_mode, stages=stages)
+    return JoypadSpace(env, SIMPLE_MOVEMENT)
+
+
 def _make_base_env(level):
     """Create the raw Mario env and reduce the controls to a small, sensible set.
 
-    We build the environment DIRECTLY instead of via ``gym_super_mario_bros.make``.
-    Why: gym 0.26 wraps ``make()`` output in helper wrappers (TimeLimit,
-    OrderEnforcing) that assume the NEW 5-value step API, but nes-py still uses
-    the OLD 4-value API — which crashes with
+    `level` is either a single level id (string) or a LIST of them. A list builds
+    the random-stages env (a random level each episode) — used to train one
+    generalist model on many levels.
+
+    For a single level we build the environment DIRECTLY instead of via
+    ``gym_super_mario_bros.make``. Why: gym 0.26 wraps ``make()`` output in helper
+    wrappers (TimeLimit, OrderEnforcing) that assume the NEW 5-value step API, but
+    nes-py still uses the OLD 4-value API — which crashes with
     "not enough values to unpack (expected 5, got 4)". Constructing the env class
     directly skips those wrappers; our MarioGymnasium adapter then handles the
     old API itself.
@@ -64,6 +95,9 @@ def _make_base_env(level):
     SIMPLE_MOVEMENT is ~7 button combos (e.g. "run right", "jump right") instead
     of every possible NES input. Fewer choices = much faster learning.
     """
+    if isinstance(level, (list, tuple)):
+        return _make_random_stages_env(level)
+
     match = re.match(r"SuperMarioBros(2?)-(\d+)-(\d+)-v(\d)", level)
     try:
         if match:
@@ -221,9 +255,20 @@ class MarioGymnasium(gymnasium.Env):
 def make_mario_env(level=DEFAULT_LEVEL, render_mode=None, stuck_steps=200):
     """Convenience factory used by train.py and play.py.
 
+    `level` may be a single level id OR a list of them (random level per episode).
     `stuck_steps` ends an episode early after that many steps without rightward
     progress (set 0 to disable). This speeds up training by not wasting frames on
     a jammed Mario.
     """
     return MarioGymnasium(level=level, render_mode=render_mode,
+                          stuck_steps=stuck_steps)
+
+
+def make_multi_level_env(levels, render_mode=None, stuck_steps=200):
+    """Train/watch ONE model across many levels — a random level each episode.
+
+    `levels` is a list like ['1-1', '1-2', '1-3'] (or full ids). This forces the
+    agent to learn transferable skills instead of memorizing one layout.
+    """
+    return make_mario_env(level=list(levels), render_mode=render_mode,
                           stuck_steps=stuck_steps)

@@ -89,8 +89,12 @@ def main():
     )
     parser.add_argument(
         "--level", type=str, default=DEFAULT_LEVEL,
-        help="Which level to train on, e.g. SuperMarioBros-1-1-v0 or "
-             "SuperMarioBros-1-2-v0.",
+        help="Which single level to train on, e.g. SuperMarioBros-1-1-v0.",
+    )
+    parser.add_argument(
+        "--levels", type=str, default=None,
+        help="Train ONE generalist model on a POOL of levels (a random one each "
+             "episode), e.g. --levels '1-1,1-2,1-3'. Overrides --level.",
     )
     parser.add_argument(
         "--ent-coef", type=float, default=0.01,
@@ -108,8 +112,14 @@ def main():
     )
     args = parser.parse_args()
 
-    env = build_training_env(args.n_envs, args.level)
-    print(f"Level: {args.level}")
+    # A pool of levels (--levels) trains a generalist; otherwise a single level.
+    if args.levels:
+        level = [s.strip() for s in args.levels.split(",") if s.strip()]
+    else:
+        level = args.level
+
+    env = build_training_env(args.n_envs, level)
+    print(f"Level(s): {level}")
 
     if args.resume:
         # Load the existing brain and keep training it (don't reset the step

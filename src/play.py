@@ -119,8 +119,13 @@ def main():
     )
     parser.add_argument(
         "--level", type=str, default=DEFAULT_LEVEL,
-        help="Which level to play, e.g. SuperMarioBros-1-1-v0 or "
-             "SuperMarioBros-1-2-v0. Use the same level the model was trained on.",
+        help="Which single level to play, e.g. SuperMarioBros-1-1-v0. Use the "
+             "same level the model was trained on.",
+    )
+    parser.add_argument(
+        "--levels", type=str, default=None,
+        help="Watch a generalist model across a POOL of levels (random each "
+             "episode), e.g. --levels '1-1,1-2,1-3'. Overrides --level.",
     )
     parser.add_argument(
         "--episodes", type=int, default=5,
@@ -168,8 +173,14 @@ def main():
     )
     args = parser.parse_args()
 
+    # A pool of levels (--levels) cycles a random one each episode.
+    if args.levels:
+        level = [s.strip() for s in args.levels.split(",") if s.strip()]
+    else:
+        level = args.level
+
     # render_mode="human" opens the game window so you can see it.
-    env = make_mario_env(level=args.level, render_mode="human")
+    env = make_mario_env(level=level, render_mode="human")
     model = PPO.load(args.model)
     deterministic = not args.stochastic
 
