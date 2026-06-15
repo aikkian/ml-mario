@@ -98,11 +98,13 @@ def _make_base_env(level):
     if isinstance(level, (list, tuple)):
         return _make_random_stages_env(level)
 
-    match = re.match(r"SuperMarioBros(2?)-(\d+)-(\d+)-v(\d)", level)
+    # Accept full ids ("SuperMarioBros-1-2-v0") and short forms ("1-2").
+    match = re.match(r"(?:SuperMarioBros(2?)-)?(\d+)-(\d+)(?:-v(\d))?$", str(level))
     try:
         if match:
             lost_levels = match.group(1) == "2"
-            world, stage, version = int(match.group(2)), int(match.group(3)), match.group(4)
+            world, stage = int(match.group(2)), int(match.group(3))
+            version = match.group(4) or "0"
             env = SuperMarioBrosEnv(
                 rom_mode=_ROM_MODES.get(version, "vanilla"),
                 lost_levels=lost_levels,

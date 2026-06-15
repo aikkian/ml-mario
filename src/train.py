@@ -41,7 +41,7 @@ from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from env import make_mario_env, DEFAULT_LEVEL
-from callbacks import make_checkpoint_callback, FlagCallback
+from callbacks import make_checkpoint_callback, FlagCallback, SuccessEvalCallback
 
 
 def _make_one_env(level):
@@ -107,6 +107,20 @@ def main():
         help="How big each learning step is.",
     )
     parser.add_argument(
+        "--eval-levels", type=str, default=None,
+        help="Levels to periodically test on and log the flag-reach rate, e.g. "
+             "'1-1,2-1'. Include unseen levels (like 2-1) to measure how well it "
+             "GENERALIZES. Saves a <save-name>_best model when it improves.",
+    )
+    parser.add_argument(
+        "--eval-freq", type=int, default=250_000,
+        help="How often (in steps) to run the success-rate evaluation.",
+    )
+    parser.add_argument(
+        "--eval-episodes", type=int, default=3,
+        help="Episodes per level per evaluation.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
@@ -165,6 +179,18 @@ def main():
         make_checkpoint_callback(save_dir="models", save_freq=checkpoint_freq),
         FlagCallback(save_dir="models"),
     ]
+
+    # Optional: periodically measure flag-reach success rate (incl. unseen levels).
+    if args.eval_levels:
+        eval_levels = [s.strip() for s in args.eval_levels.split(",") if s.strip()]
+        callbacks.append(SuccessEvalCallback(
+            eval_levels=eval_levels,
+            eval_freq=args.eval_freq,
+            n_eval_episodes=args.eval_episodes,
+            save_dir="models",
+            save_name=args.save_name,
+        ))
+        print(f"Evaluating on {eval_levels} every {args.eval_freq:,} steps.")
 
     print(f"Training for {args.timesteps:,} steps on {args.n_envs} parallel "
           f"env(s), device={model.device}. This can take a while...")
