@@ -243,14 +243,31 @@ class MarioGymnasium(gymnasium.Env):
         return self._stacked(), float(total_reward), terminated, truncated, info
 
     def render(self):
-        """Open/refresh the game window (used when watching it play)."""
-        try:
-            return self._env.render()
-        except TypeError:
-            # Older nes-py expects a mode argument.
-            return self._env.render(mode="human")
+        """Show the game window when watching.
+
+        We draw the frame ourselves with OpenCV instead of using nes-py's built-in
+        viewer. nes-py renders via the old `pyglet` library, which is broken on
+        Python 3.13 (a Windows COM error). OpenCV works everywhere and lets us
+        upscale the small NES screen for easier viewing.
+        """
+        frame = self._last_rgb
+        if frame is None:
+            return None
+        if self.render_mode == "human":
+            # Upscale 2x (crisp pixels) and convert RGB -> BGR for OpenCV.
+            big = cv2.resize(
+                frame, (frame.shape[1] * 2, frame.shape[0] * 2),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            cv2.imshow("ml-mario", cv2.cvtColor(big, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)  # let the window actually repaint
+        return frame
 
     def close(self):
+        try:
+            cv2.destroyWindow("ml-mario")
+        except Exception:
+            pass
         self._env.close()
 
 
