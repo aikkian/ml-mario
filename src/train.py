@@ -41,17 +41,18 @@ from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from env import make_mario_env, DEFAULT_LEVEL
-from callbacks import make_checkpoint_callback, FlagCallback
+from callbacks import make_checkpoint_callback, FlagCallback, SuccessEvalCallback
 
 
-def _make_one_env(level):
+def _make_one_env(level, shape_reward):
     """Build a single wrapped Mario env. Monitor records episode reward/length
     for the live charts."""
-    env = make_mario_env(level=level, render_mode=None)  # no window = faster
+    env = make_mario_env(level=level, render_mode=None,  # no window = faster
+                         shape_reward=shape_reward)
     return Monitor(env)
 
 
-def build_training_env(n_envs, level):
+def build_training_env(n_envs, level, shape_reward=False):
     """Create `n_envs` Mario environments for the agent to learn from.
 
     - n_envs == 1: DummyVecEnv (everything in this one process).
@@ -59,7 +60,7 @@ def build_training_env(n_envs, level):
                    genuinely run in parallel across CPU cores. This is the main
                    speed lever on a CPU/Mac.
     """
-    env_fns = [partial(_make_one_env, level) for _ in range(n_envs)]
+    env_fns = [partial(_make_one_env, level, shape_reward) for _ in range(n_envs)]
     if n_envs > 1:
         return SubprocVecEnv(env_fns)
     return DummyVecEnv(env_fns)
@@ -89,8 +90,12 @@ def main():
     )
     parser.add_argument(
         "--level", type=str, default=DEFAULT_LEVEL,
-        help="Which level to train on, e.g. SuperMarioBros-1-1-v0 or "
-             "SuperMarioBros-1-2-v0.",
+        help="Which single level to train on, e.g. SuperMarioBros-1-1-v0.",
+    )
+    parser.add_argument(
+        "--levels", type=str, default=None,
+        help="Train ONE generalist model on a POOL of levels (a random one each "
+             "episode), e.g. --levels '1-1,1-2,1-3'. Overrides --level.",
     )
     parser.add_argument(
         "--ent-coef", type=float, default=0.01,
@@ -103,13 +108,59 @@ def main():
         help="How big each learning step is.",
     )
     parser.add_argument(
+        "--eval-levels", type=str, default=None,
+        help="Levels to periodically test on and log the flag-reach rate, e.g. "
+             "'1-1,2-1'. Include unseen levels (like 2-1) to measure how well it "
+             "GENERALIZES. Saves a <save-name>_best model when it improves.",
+    )
+    parser.add_argument(
+        "--eval-freq", type=int, default=250_000,
+        help="How often (in steps) to run the success-rate evaluation.",
+    )
+    parser.add_argument(
+        "--eval-episodes", type=int, default=3,
+        help="Episodes per level per evaluation.",
+    )
+    parser.add_argument(
+        "--n-epochs", type=int, default=10,
+        help="Training passes over each batch of experience. LOWER (e.g. 4) = "
+             "faster on CPU (higher fps), slightly less sample-efficient. The "
+             "main knob for speeding up CPU training.",
+    )
+    parser.add_argument(
+        "--n-steps", type=int, default=512,
+        help="Frames each env collects before an update. (Applied on fresh runs.)",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=64,
+        help="Minibatch size for the network update. Larger can use the CPU "
+             "more efficiently.",
+    )
+    parser.add_argument(
+        "--shape-reward", action="store_true",
+        help="Add a denser reward (bonus for new furthest-right progress + a big "
+             "flag-completion bonus) to help on hard levels like 1-2/1-3. Off by "
+             "default. Don't mix shaped and unshaped checkpoints when resuming.",
+    )
+    parser.add_argument(
+        "--save-freq", type=int, default=50_000,
+        help="Save a checkpoint every this many total frames. Raise it (e.g. "
+             "250000) on long runs so you don't accumulate hundreds of files.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
     args = parser.parse_args()
 
-    env = build_training_env(args.n_envs, args.level)
-    print(f"Level: {args.level}")
+    # A pool of levels (--levels) trains a generalist; otherwise a single level.
+    if args.levels:
+        level = [s.strip() for s in args.levels.split(",") if s.strip()]
+    else:
+        level = args.level
+
+    env = build_training_env(args.n_envs, level, shape_reward=args.shape_reward)
+    print(f"Level(s): {level}  shape_reward={args.shape_reward}")
 
     if args.resume:
         # Load the existing brain and keep training it (don't reset the step
@@ -123,7 +174,11 @@ def main():
         model.ent_coef = args.ent_coef
         model.learning_rate = args.learning_rate
         model.lr_schedule = get_schedule_fn(args.learning_rate)
-        print(f"ent_coef={model.ent_coef}  learning_rate={args.learning_rate}")
+        # Safe to change on resume (n_steps stays as saved to keep the buffer).
+        model.n_epochs = args.n_epochs
+        model.batch_size = args.batch_size
+        print(f"ent_coef={model.ent_coef}  learning_rate={args.learning_rate}  "
+              f"n_epochs={model.n_epochs}  batch_size={model.batch_size}")
         reset_counter = False
     else:
         # Create a fresh PPO agent.
@@ -138,23 +193,35 @@ def main():
             device=args.device,
             tensorboard_log="logs",
             learning_rate=args.learning_rate,  # how big each learning step is
-            n_steps=512,          # frames per env collected before each update
-            batch_size=64,
-            n_epochs=10,
+            n_steps=args.n_steps,    # frames per env collected before each update
+            batch_size=args.batch_size,
+            n_epochs=args.n_epochs,
             gamma=0.9,            # how much it values future vs immediate reward
             gae_lambda=1.0,
             ent_coef=args.ent_coef,  # encourages exploration (trying new things)
         )
         reset_counter = True
 
-    # Save a checkpoint roughly every 50k *total* frames. With several parallel
+    # Save a checkpoint every --save-freq *total* frames. With several parallel
     # envs each callback step covers n_envs frames, so we divide to keep the
     # real interval about the same.
-    checkpoint_freq = max(50_000 // args.n_envs, 1)
+    checkpoint_freq = max(args.save_freq // args.n_envs, 1)
     callbacks = [
         make_checkpoint_callback(save_dir="models", save_freq=checkpoint_freq),
         FlagCallback(save_dir="models"),
     ]
+
+    # Optional: periodically measure flag-reach success rate (incl. unseen levels).
+    if args.eval_levels:
+        eval_levels = [s.strip() for s in args.eval_levels.split(",") if s.strip()]
+        callbacks.append(SuccessEvalCallback(
+            eval_levels=eval_levels,
+            eval_freq=args.eval_freq,
+            n_eval_episodes=args.eval_episodes,
+            save_dir="models",
+            save_name=args.save_name,
+        ))
+        print(f"Evaluating on {eval_levels} every {args.eval_freq:,} steps.")
 
     print(f"Training for {args.timesteps:,} steps on {args.n_envs} parallel "
           f"env(s), device={model.device}. This can take a while...")

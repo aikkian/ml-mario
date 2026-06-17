@@ -50,13 +50,44 @@ DEFAULT_LEVEL = "SuperMarioBros-1-1-v0"
 _ROM_MODES = {"0": "vanilla", "1": "downsample", "2": "pixel", "3": "rectangle"}
 
 
+def _normalize_stage(level):
+    """Accept 'SuperMarioBros-1-2-v0' OR '1-2' and return ('1-2', rom_mode)."""
+    match = re.match(r"(?:SuperMarioBros2?-)?(\d+)-(\d+)(?:-v(\d))?$", str(level))
+    if not match:
+        return str(level), "vanilla"
+    world, stage, version = match.group(1), match.group(2), match.group(3) or "0"
+    return f"{world}-{stage}", _ROM_MODES.get(version, "vanilla")
+
+
+def _make_random_stages_env(levels):
+    """Build a Mario env that picks a RANDOM level from `levels` each episode.
+
+    This is the heart of training a generalist: because the agent can't predict
+    which level it's in, it must learn skills that transfer across all of them
+    instead of memorizing one layout.
+    """
+    stages, rom_mode = [], "vanilla"
+    for level in levels:
+        stage, rom_mode = _normalize_stage(level)
+        stages.append(stage)
+    # SuperMarioBrosRandomStagesEnv loads the ROM once and re-randomizes the
+    # target stage on every reset.
+    from gym_super_mario_bros import SuperMarioBrosRandomStagesEnv
+    env = SuperMarioBrosRandomStagesEnv(rom_mode=rom_mode, stages=stages)
+    return JoypadSpace(env, SIMPLE_MOVEMENT)
+
+
 def _make_base_env(level):
     """Create the raw Mario env and reduce the controls to a small, sensible set.
 
-    We build the environment DIRECTLY instead of via ``gym_super_mario_bros.make``.
-    Why: gym 0.26 wraps ``make()`` output in helper wrappers (TimeLimit,
-    OrderEnforcing) that assume the NEW 5-value step API, but nes-py still uses
-    the OLD 4-value API — which crashes with
+    `level` is either a single level id (string) or a LIST of them. A list builds
+    the random-stages env (a random level each episode) — used to train one
+    generalist model on many levels.
+
+    For a single level we build the environment DIRECTLY instead of via
+    ``gym_super_mario_bros.make``. Why: gym 0.26 wraps ``make()`` output in helper
+    wrappers (TimeLimit, OrderEnforcing) that assume the NEW 5-value step API, but
+    nes-py still uses the OLD 4-value API — which crashes with
     "not enough values to unpack (expected 5, got 4)". Constructing the env class
     directly skips those wrappers; our MarioGymnasium adapter then handles the
     old API itself.
@@ -64,11 +95,16 @@ def _make_base_env(level):
     SIMPLE_MOVEMENT is ~7 button combos (e.g. "run right", "jump right") instead
     of every possible NES input. Fewer choices = much faster learning.
     """
-    match = re.match(r"SuperMarioBros(2?)-(\d+)-(\d+)-v(\d)", level)
+    if isinstance(level, (list, tuple)):
+        return _make_random_stages_env(level)
+
+    # Accept full ids ("SuperMarioBros-1-2-v0") and short forms ("1-2").
+    match = re.match(r"(?:SuperMarioBros(2?)-)?(\d+)-(\d+)(?:-v(\d))?$", str(level))
     try:
         if match:
             lost_levels = match.group(1) == "2"
-            world, stage, version = int(match.group(2)), int(match.group(3)), match.group(4)
+            world, stage = int(match.group(2)), int(match.group(3))
+            version = match.group(4) or "0"
             env = SuperMarioBrosEnv(
                 rom_mode=_ROM_MODES.get(version, "vanilla"),
                 lost_levels=lost_levels,
@@ -92,7 +128,8 @@ class MarioGymnasium(gymnasium.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
     def __init__(self, level=DEFAULT_LEVEL, skip=4, stack=4,
-                 width=84, height=84, render_mode=None, stuck_steps=200):
+                 width=84, height=84, render_mode=None, stuck_steps=200,
+                 shape_reward=False, progress_coef=0.1, flag_bonus=50.0):
         super().__init__()
         self._env = _make_base_env(level)
 
@@ -111,6 +148,17 @@ class MarioGymnasium(gymnasium.Env):
         self._stuck_steps = stuck_steps
         self._max_x = 0            # furthest right Mario has reached this episode
         self._stuck_counter = 0    # steps since that furthest point
+
+        # REWARD SHAPING (opt-in). Adds a denser learning signal on top of the
+        # game's built-in reward, to help on hard levels (1-2, 1-3):
+        #   - progress_coef: bonus per pixel of NEW furthest-right ground reached
+        #     (rewards genuine forward progress, discourages pacing in place),
+        #   - flag_bonus: a big one-time reward for finishing the level (sharpens
+        #     credit assignment for actually winning).
+        self._shape_reward = shape_reward
+        self._progress_coef = progress_coef
+        self._flag_bonus = flag_bonus
+        self._shape_max_x = 0      # furthest-right used for the progress bonus
 
         # The most recent FULL-COLOR game frame (before grayscale/resize). Kept
         # so play.py can record nice-looking videos. Shape ~ (240, 256, 3) uint8.
@@ -158,6 +206,7 @@ class MarioGymnasium(gymnasium.Env):
         # Reset the stuck tracker for the new attempt.
         self._max_x = 0
         self._stuck_counter = 0
+        self._shape_max_x = 0
         return self._stacked(), {}
 
     def step(self, action):
@@ -204,26 +253,66 @@ class MarioGymnasium(gymnasium.Env):
                     # correct signal for the learning algorithm.
                     truncated = True
 
+        # REWARD SHAPING (opt-in): denser signal for progress + finishing.
+        if self._shape_reward:
+            x_pos = info.get("x_pos")
+            if x_pos is not None and x_pos > self._shape_max_x:
+                # Reward only genuinely NEW ground, not back-and-forth motion.
+                total_reward += self._progress_coef * (x_pos - self._shape_max_x)
+                self._shape_max_x = x_pos
+            if info.get("flag_get"):
+                total_reward += self._flag_bonus
+
         return self._stacked(), float(total_reward), terminated, truncated, info
 
     def render(self):
-        """Open/refresh the game window (used when watching it play)."""
-        try:
-            return self._env.render()
-        except TypeError:
-            # Older nes-py expects a mode argument.
-            return self._env.render(mode="human")
+        """Show the game window when watching.
+
+        We draw the frame ourselves with OpenCV instead of using nes-py's built-in
+        viewer. nes-py renders via the old `pyglet` library, which is broken on
+        Python 3.13 (a Windows COM error). OpenCV works everywhere and lets us
+        upscale the small NES screen for easier viewing.
+        """
+        frame = self._last_rgb
+        if frame is None:
+            return None
+        if self.render_mode == "human":
+            # Upscale 2x (crisp pixels) and convert RGB -> BGR for OpenCV.
+            big = cv2.resize(
+                frame, (frame.shape[1] * 2, frame.shape[0] * 2),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            cv2.imshow("ml-mario", cv2.cvtColor(big, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)  # let the window actually repaint
+        return frame
 
     def close(self):
+        try:
+            cv2.destroyWindow("ml-mario")
+        except Exception:
+            pass
         self._env.close()
 
 
-def make_mario_env(level=DEFAULT_LEVEL, render_mode=None, stuck_steps=200):
+def make_mario_env(level=DEFAULT_LEVEL, render_mode=None, stuck_steps=200,
+                   shape_reward=False):
     """Convenience factory used by train.py and play.py.
 
+    `level` may be a single level id OR a list of them (random level per episode).
     `stuck_steps` ends an episode early after that many steps without rightward
     progress (set 0 to disable). This speeds up training by not wasting frames on
-    a jammed Mario.
+    a jammed Mario. `shape_reward` adds the opt-in progress + flag bonuses.
     """
     return MarioGymnasium(level=level, render_mode=render_mode,
-                          stuck_steps=stuck_steps)
+                          stuck_steps=stuck_steps, shape_reward=shape_reward)
+
+
+def make_multi_level_env(levels, render_mode=None, stuck_steps=200,
+                         shape_reward=False):
+    """Train/watch ONE model across many levels — a random level each episode.
+
+    `levels` is a list like ['1-1', '1-2', '1-3'] (or full ids). This forces the
+    agent to learn transferable skills instead of memorizing one layout.
+    """
+    return make_mario_env(level=list(levels), render_mode=render_mode,
+                          stuck_steps=stuck_steps, shape_reward=shape_reward)
