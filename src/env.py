@@ -128,7 +128,8 @@ class MarioGymnasium(gymnasium.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
     def __init__(self, level=DEFAULT_LEVEL, skip=4, stack=4,
-                 width=84, height=84, render_mode=None, stuck_steps=200):
+                 width=84, height=84, render_mode=None, stuck_steps=200,
+                 shape_reward=False, progress_coef=0.1, flag_bonus=50.0):
         super().__init__()
         self._env = _make_base_env(level)
 
@@ -147,6 +148,17 @@ class MarioGymnasium(gymnasium.Env):
         self._stuck_steps = stuck_steps
         self._max_x = 0            # furthest right Mario has reached this episode
         self._stuck_counter = 0    # steps since that furthest point
+
+        # REWARD SHAPING (opt-in). Adds a denser learning signal on top of the
+        # game's built-in reward, to help on hard levels (1-2, 1-3):
+        #   - progress_coef: bonus per pixel of NEW furthest-right ground reached
+        #     (rewards genuine forward progress, discourages pacing in place),
+        #   - flag_bonus: a big one-time reward for finishing the level (sharpens
+        #     credit assignment for actually winning).
+        self._shape_reward = shape_reward
+        self._progress_coef = progress_coef
+        self._flag_bonus = flag_bonus
+        self._shape_max_x = 0      # furthest-right used for the progress bonus
 
         # The most recent FULL-COLOR game frame (before grayscale/resize). Kept
         # so play.py can record nice-looking videos. Shape ~ (240, 256, 3) uint8.
@@ -194,6 +206,7 @@ class MarioGymnasium(gymnasium.Env):
         # Reset the stuck tracker for the new attempt.
         self._max_x = 0
         self._stuck_counter = 0
+        self._shape_max_x = 0
         return self._stacked(), {}
 
     def step(self, action):
@@ -240,6 +253,16 @@ class MarioGymnasium(gymnasium.Env):
                     # correct signal for the learning algorithm.
                     truncated = True
 
+        # REWARD SHAPING (opt-in): denser signal for progress + finishing.
+        if self._shape_reward:
+            x_pos = info.get("x_pos")
+            if x_pos is not None and x_pos > self._shape_max_x:
+                # Reward only genuinely NEW ground, not back-and-forth motion.
+                total_reward += self._progress_coef * (x_pos - self._shape_max_x)
+                self._shape_max_x = x_pos
+            if info.get("flag_get"):
+                total_reward += self._flag_bonus
+
         return self._stacked(), float(total_reward), terminated, truncated, info
 
     def render(self):
@@ -271,23 +294,25 @@ class MarioGymnasium(gymnasium.Env):
         self._env.close()
 
 
-def make_mario_env(level=DEFAULT_LEVEL, render_mode=None, stuck_steps=200):
+def make_mario_env(level=DEFAULT_LEVEL, render_mode=None, stuck_steps=200,
+                   shape_reward=False):
     """Convenience factory used by train.py and play.py.
 
     `level` may be a single level id OR a list of them (random level per episode).
     `stuck_steps` ends an episode early after that many steps without rightward
     progress (set 0 to disable). This speeds up training by not wasting frames on
-    a jammed Mario.
+    a jammed Mario. `shape_reward` adds the opt-in progress + flag bonuses.
     """
     return MarioGymnasium(level=level, render_mode=render_mode,
-                          stuck_steps=stuck_steps)
+                          stuck_steps=stuck_steps, shape_reward=shape_reward)
 
 
-def make_multi_level_env(levels, render_mode=None, stuck_steps=200):
+def make_multi_level_env(levels, render_mode=None, stuck_steps=200,
+                         shape_reward=False):
     """Train/watch ONE model across many levels — a random level each episode.
 
     `levels` is a list like ['1-1', '1-2', '1-3'] (or full ids). This forces the
     agent to learn transferable skills instead of memorizing one layout.
     """
     return make_mario_env(level=list(levels), render_mode=render_mode,
-                          stuck_steps=stuck_steps)
+                          stuck_steps=stuck_steps, shape_reward=shape_reward)

@@ -44,14 +44,15 @@ from env import make_mario_env, DEFAULT_LEVEL
 from callbacks import make_checkpoint_callback, FlagCallback, SuccessEvalCallback
 
 
-def _make_one_env(level):
+def _make_one_env(level, shape_reward):
     """Build a single wrapped Mario env. Monitor records episode reward/length
     for the live charts."""
-    env = make_mario_env(level=level, render_mode=None)  # no window = faster
+    env = make_mario_env(level=level, render_mode=None,  # no window = faster
+                         shape_reward=shape_reward)
     return Monitor(env)
 
 
-def build_training_env(n_envs, level):
+def build_training_env(n_envs, level, shape_reward=False):
     """Create `n_envs` Mario environments for the agent to learn from.
 
     - n_envs == 1: DummyVecEnv (everything in this one process).
@@ -59,7 +60,7 @@ def build_training_env(n_envs, level):
                    genuinely run in parallel across CPU cores. This is the main
                    speed lever on a CPU/Mac.
     """
-    env_fns = [partial(_make_one_env, level) for _ in range(n_envs)]
+    env_fns = [partial(_make_one_env, level, shape_reward) for _ in range(n_envs)]
     if n_envs > 1:
         return SubprocVecEnv(env_fns)
     return DummyVecEnv(env_fns)
@@ -136,6 +137,12 @@ def main():
              "more efficiently.",
     )
     parser.add_argument(
+        "--shape-reward", action="store_true",
+        help="Add a denser reward (bonus for new furthest-right progress + a big "
+             "flag-completion bonus) to help on hard levels like 1-2/1-3. Off by "
+             "default. Don't mix shaped and unshaped checkpoints when resuming.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
@@ -147,8 +154,8 @@ def main():
     else:
         level = args.level
 
-    env = build_training_env(args.n_envs, level)
-    print(f"Level(s): {level}")
+    env = build_training_env(args.n_envs, level, shape_reward=args.shape_reward)
+    print(f"Level(s): {level}  shape_reward={args.shape_reward}")
 
     if args.resume:
         # Load the existing brain and keep training it (don't reset the step
