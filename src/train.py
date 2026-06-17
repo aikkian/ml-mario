@@ -143,6 +143,11 @@ def main():
              "default. Don't mix shaped and unshaped checkpoints when resuming.",
     )
     parser.add_argument(
+        "--save-freq", type=int, default=50_000,
+        help="Save a checkpoint every this many total frames. Raise it (e.g. "
+             "250000) on long runs so you don't accumulate hundreds of files.",
+    )
+    parser.add_argument(
         "--save-name", type=str, default="mario_ppo_final",
         help="Filename (without extension) for the final saved model.",
     )
@@ -197,10 +202,10 @@ def main():
         )
         reset_counter = True
 
-    # Save a checkpoint roughly every 50k *total* frames. With several parallel
+    # Save a checkpoint every --save-freq *total* frames. With several parallel
     # envs each callback step covers n_envs frames, so we divide to keep the
     # real interval about the same.
-    checkpoint_freq = max(50_000 // args.n_envs, 1)
+    checkpoint_freq = max(args.save_freq // args.n_envs, 1)
     callbacks = [
         make_checkpoint_callback(save_dir="models", save_freq=checkpoint_freq),
         FlagCallback(save_dir="models"),
